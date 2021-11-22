@@ -1,0 +1,200 @@
+---
+title: "Corona DAT"
+author: ""
+output: 
+  html_notebook:
+    highlight: tango
+    number_section: yes
+    theme: paper
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+---
+
+# Vorbereitung
+
+Die Daten wurden, wie im R Skript "unzip.Rmd" beschrieben, in eine
+strukturierte Form gebracht
+
+## Optionen setzen
+
+Für den Excel Export muss ein Java Parameter angepasst werden.
+
+```{r}
+options(java.parameters = "-Xmx2048m")
+```
+
+## Libraries laden
+
+Im nächsten Schritt werden Funktionalitäten für die Analyse geladen.
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(magrittr)
+```
+
+# Daten laden 
+
+```{r eval=FALSE, message=FALSE}
+ordner <- dir("../data/strukturiert")
+ct_ordner <- length(ordner)
+l <- vector(mode = "list", length = ct_ordner)
+for (i in 1:ct_ordner){
+  m_path <- paste0("../data/strukturiert/", ordner[i], "/")
+  name_rds <- paste0(m_path, ordner[i], ".rds")
+  name_zip <- paste0(m_path, ordner[i], "_orig_csv.zip")
+  name_ages_zip <- paste0(m_path, ordner[i], "_orig_csv_ages.zip")
+  name_gesund_zip <- paste0(m_path, ordner[i],"_orig_csv_gesundheitsministerium.zip")
+  if (file.exists(name_rds)){
+    l[[i]] <- readRDS(name_rds)
+  } else if (file.exists(name_zip) | file.exists(name_ages_zip) | 
+             file.exists(name_gesund_zip)){
+    files <- dir(m_path, pattern = "\\.csv$")
+    l[[i]] <- vector(mode = "list", length = length(files))
+    for (j in 1:length(files)){
+       f_name <- files[j]
+       f_name <- str_replace(f_name, "\\.csv", "")
+       l[[i]][[j]] <- read_csv2(paste0(m_path, files[j]))
+       names(l[[i]])[j] <- f_name
+    }
+  }
+  names(l)[i] <- ordner[i]
+}
+```
+
+```{r eval=FALSE, message=FALSE}
+write_rds(l, "../data/daten_strukturiert.rds")
+```
+
+```{r}
+dat <- read_rds("../data/daten_strukturiert.rds")
+```
+
+# Überblick erhalten
+In den Daten gibt es drei unterschiedliche Phasen bzw. Datenquellen:
+
+1. Frühe Datenphase (erkennbar durch die Tabelle trend): vor dem 14.04.20 
+2. Daten aus dem Gesundheitsministerium (erkennbar durch die Tabelle Epikurve): ab dem 14.04.20
+3. Daten der AGES (erkennbar durch die Tabelle CovidFaelle_Timeline): ab dem 06.10.20
+
+Daten aus den Tabellen Epikurve und CovidFaelle_Timeline überlagern sich daher ab dem 06.10.20
+
+```{r, eval = FALSE}
+l_dat <- length(dat)
+system_df <- data.frame(Zeitpunkt = rep(ymd_hms("1900-01-01 00:00:00"), l_dat), 
+                        trend = rep(NA, l_dat), 
+                        Epikurve = rep(NA, l_dat), 
+                        CovidFaelle_Timeline = rep(NA, l_dat),
+                        Filename = rep(NA, l_dat))
+for (i in 1:l_dat){
+  ts <- names(dat)[i]
+  nm <- names(dat[[i]])
+  system_df[i,5] <- ts
+  if (str_detect(ts, "_")){
+    ts <- ymd_hms(ts)
+  } else {
+    ts <- ymd_hms(paste0(ts, "_000000"))
+  }
+  system_df[i,1] <- ts
+  system_df[i,2] <- ifelse("trend" %in% nm,1,0)
+  system_df[i,3] <- ifelse("Epikurve" %in% nm,1,0)
+  system_df[i,4] <- ifelse("CovidFaelle_Timeline" %in% nm,1,0)
+}
+```
+
+```{r, eval = FALSE}
+write_rds(system_df, paste0("../data/system_df.rds"))
+```
+
+```{r}
+system_df <- read_rds("../data/system_df.rds")
+```
+
+# Daten vorbereiten
+
+## Epikurve Matrix
+
+Aus den Daten der folgenden Tabellen
+
+* trend
+* Epikurve
+* CovidFaelle_Timeline
+
+wird ein Datensatz gebildet, die die Zahl der Neuinfektionen, Datumsinformationen, den Filenamen sowie die Quelle (i.e. eine der drei Tabellen umfasst)
+
+```{r}
+file_names <- system_df %>% filter(trend == 1) %$% Filename
+trend <- tibble()
+for (file in file_names){
+  d <- tibble(dat[[file]]$trend) %>% 
+    rename() %>% 
+    mutate(freq = as.numeric(freq),
+           erkrankte = ifelse(row_number() == 1, freq, freq - lag(freq)),
+           datum = as.character(datum),
+           file_name = file,
+           publikationszeitpunkt = ymd_hms(file),
+           quelle = "trend") %>% 
+    select(erkrankte, file_name, datum, publikationszeitpunkt, quelle)
+  trend <- bind_rows(trend,d)
+}
+
+file_names <- system_df %>% filter(Epikurve == 1) %$% Filename
+epikurve <- tibble()
+for (file in file_names){
+  d <- tibble(dat[[file]]$Epikurve) %>% 
+    mutate(erkrankte = as.numeric(`tägliche Erkrankungen`),
+           datum = as.character(time),
+           file_name = ifelse(str_length(file) == 8, paste0(file,"_000000"), file), 
+           publikationszeitpunkt = ymd_hms(file_name),
+           quelle = "Epikurve") %>% 
+    select(erkrankte, file_name, datum, publikationszeitpunkt, quelle)
+  epikurve <- bind_rows(epikurve, d)
+}
+
+
+file_names <- system_df %>% filter(CovidFaelle_Timeline == 1) %$% Filename
+timeline <- tibble()
+for (file in file_names){
+  if (nrow(dat[[file]]$CovidFaelle_Timeline) > 0) {
+  d <- tibble(dat[[file]]$CovidFaelle_Timeline) %>% 
+    mutate(erkrankte = as.numeric(`AnzahlFaelle`), 
+           datum = as.character(Time), 
+           file_name = file,
+           publikationszeitpunkt = ymd_hms(file),
+           quelle = "CovidFaelle_Timeline") %>% 
+    filter(Bundesland == "Österreich") %>% 
+    select(erkrankte, file_name, datum, publikationszeitpunkt, quelle)
+  timeline <- bind_rows(timeline,d)
+  }
+}
+
+```
+
+# Daten kombinieren und finalen Datensatz speichern
+```{r}
+epi_long <- bind_rows(timeline, trend, epikurve) %>% 
+  mutate(publikationstag = ymd(str_sub(publikationszeitpunkt, 1, 10)),
+         datum = case_when(
+           quelle == "trend" ~ ymd(datum),
+           quelle == "CovidFaelle_Timeline" ~ dmy(str_sub(datum, 1, 10)),
+           quelle == "Epikurve" & str_length(datum) > 5 ~ dmy(datum),
+           quelle == "Epikurve" & str_length(datum) == 5 ~ dmy(paste0(datum, ".2020"))
+         )) %>% 
+  filter(datum > "2020-02-01")
+```
+
+```{r}
+write_rds(epi_long, paste0("../data/epi_long_quelle.rds"))
+```
+
+# Session Info
+
+Information über die Analyseumgebung (Betriebssystem, R Version, Pakete mit
+Versionen)
+
+```{r}
+sessionInfo()
+```

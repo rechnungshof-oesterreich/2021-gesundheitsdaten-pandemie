@@ -1,0 +1,64 @@
+---
+title: "Daten entzippen und strukturieren"
+author: ''
+output:
+  html_document:
+    df_print: paged
+---
+
+# Libraries laden
+
+```{r}
+library(stringr)
+```
+
+
+# Daten strukturieren
+
+## Ordner erstellen
+
+```{r eval = FALSE}
+dir.create("../data/strukturiert")
+```
+
+## Daten extrahieren
+
+```{r eval=FALSE}
+ordner <- dir("../data/archive")
+for (o in ordner){
+  m_path <- paste0("../data/archive/", o, "/data/")
+  ordner_files <- dir(m_path)
+  for (f in ordner_files){
+    if (str_detect(f, "\\.rds$")){
+      name <- f
+      name <- str_replace(name, "\\.rds$", "")
+      target <- paste0("../data/strukturiert/", name)
+      dir.create(target, recursive = TRUE, showWarnings = FALSE)
+      file.copy(from = paste0(m_path, f), to = paste0(target), overwrite = TRUE)
+    } else if (str_detect(f, "_orig_csv\\.zip$")){
+      name <- f
+      name <- str_replace(name, "_orig_csv\\.zip$", "")
+      target <- paste0("../data/strukturiert/", name)
+      dir.create(target, recursive = TRUE, showWarnings = FALSE)
+      file.copy(from = paste0(m_path, f), to = paste0(target), overwrite = TRUE)
+      unzip(zipfile = paste0(target, "/", f), overwrite = TRUE, exdir = target)
+    } else if (str_detect(f, "_orig_csv_ages\\.zip$")){
+      name <- f
+      name <- str_replace(name, "_orig_csv_ages\\.zip$", "")
+      target <- paste0("../data/strukturiert/", name)
+      dir.create(target, recursive = TRUE, showWarnings = FALSE)
+      file.copy(from = paste0(m_path, f), to = paste0(target), overwrite = TRUE)
+      unzip(zipfile = paste0(target, "/", f), overwrite = TRUE, exdir = target)
+    } else if (str_detect(f, "_orig_csv_gesundheitsministerium\\.zip$")){
+      name <- f
+      name <- str_replace(name, "_orig_csv_gesundheitsministerium\\.zip$", "")
+      target <- paste0("../data/strukturiert/", name)
+      dir.create(target, recursive = TRUE, showWarnings = FALSE)
+      file.copy(from = paste0(m_path, f), to = paste0(target), overwrite = TRUE)
+      unzip(zipfile = paste0(target, "/", f), overwrite = TRUE, exdir = target)
+    } 
+  }
+}
+```
+  
+  

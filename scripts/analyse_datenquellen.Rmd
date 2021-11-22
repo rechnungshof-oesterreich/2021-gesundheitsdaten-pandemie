@@ -1,0 +1,220 @@
+---
+title: "Vergleich Daten AGES und Gesundheitsministerium – Anhang"
+author: ""
+output:
+  html_document:
+    toc: yes
+    toc_depth: '2'
+    number_section: TRUE
+    df_print: paged
+  word_document:
+    toc: no
+    toc_depth: '2'
+---
+
+# Vorbereitung
+
+## Pakete installieren
+
+Pakete werden installiert, sofern sie nicht bereits vorhanden sind.
+
+```{r install_packages, message=FALSE, include=TRUE}
+needed_packages <- c("tidyverse", "lubridate", "scales")
+install.packages(setdiff(needed_packages, rownames(installed.packages()))) 
+```
+
+## Pakete laden
+```{r load_packages, message=FALSE, include=TRUE}
+library("tidyverse")
+library("scales")
+library("lubridate")
+```
+
+# Daten vorbereiten
+Die Daten werden, wie in den Files unzip.Rmd und preprocessing.Rmd beschrieben, aufbereitet.
+
+## Daten laden
+```{r message=FALSE, include=TRUE}
+epi_long_quelle <- read_rds("../data/epi_long_quelle_komprimiert.RDS")
+```
+
+## CovidFaelle_Timeline.csv Daten vorbereiten
+
+```{r message=FALSE, include=TRUE}
+epi_timeline <- epi_long_quelle %>% 
+  mutate(delete = case_when(
+    datum < "2020-03-20" ~ 0,
+    publikationstag > "2021-02-01" ~ 0, 
+    publikationstag == "2020-04-16" & datum == "2020-04-16" ~ 0,
+    publikationstag == "2020-04-17" & datum == "2020-04-17" ~ 0,
+    publikationstag == "2020-04-18" & datum == "2020-04-18" ~ 0,
+    publikationstag == "2020-04-19" & datum == "2020-04-19" ~ 0,
+    publikationstag == "2020-04-20" & datum == "2020-04-20" ~ 0,
+    publikationstag == "2020-04-21" & datum == "2020-04-21" ~ 0,
+    publikationstag == "2020-04-22" & datum == "2020-04-22" ~ 0,
+    publikationstag == "2020-04-23" & datum == "2020-04-23" ~ 0,
+    publikationstag == "2020-04-14" & quelle == "trend" ~ 0, 
+    publikationstag > "2020-10-06" & quelle == "Epikurve" ~ 0,
+    TRUE ~ 1)) %>% 
+  filter(delete == 1) %>% 
+  filter(!is.na(erkrankte)) %>% 
+  filter(datum != publikationstag) %>% 
+  group_by(datum, publikationstag) %>% 
+  slice(which.max(publikationszeitpunkt)) %>% 
+  mutate(monat = format(as.Date(datum), "%b. %Y"),
+         monat = factor(monat, levels = c("Mär. 2020", "Apr. 2020", "Mai. 2020", "Jun. 2020", "Jul. 2020", "Aug. 2020", "Sep. 2020", "Okt. 2020", "Nov. 2020", "Dez. 2020", "Jan. 2021")),
+         gruppe = "AGES") %>% 
+  select(-delete)
+```
+
+## Epikurve.csv Daten vorbereiten
+Zwischen dem 03. November 2020 und 05. November 2020 sind keine Epikurve.csv-Files vorhanden. Für diese drei Tage liegen daher keine Daten vor.
+
+```{r message=FALSE, include=TRUE}
+epi_epikurve <- epi_long_quelle %>% 
+  mutate(delete = case_when(
+    datum < "2020-03-20" ~ 0,
+    publikationstag > "2021-02-01" ~ 0,
+    publikationstag == "2020-04-16" & datum == "2020-04-16" ~ 0,
+    publikationstag == "2020-04-17" & datum == "2020-04-17" ~ 0,
+    publikationstag == "2020-04-18" & datum == "2020-04-18" ~ 0,
+    publikationstag == "2020-04-19" & datum == "2020-04-19" ~ 0,
+    publikationstag == "2020-04-20" & datum == "2020-04-20" ~ 0,
+    publikationstag == "2020-04-21" & datum == "2020-04-21" ~ 0,
+    publikationstag == "2020-04-22" & datum == "2020-04-22" ~ 0,
+    publikationstag == "2020-04-23" & datum == "2020-04-23" ~ 0,
+    publikationstag == "2020-04-14" & quelle == "trend" ~ 0,
+    quelle == "CovidFaelle_Timeline" ~ 0,
+    TRUE ~ 1),
+    ) %>% 
+  filter(delete == 1) %>% 
+  filter(!is.na(erkrankte)) %>% 
+  group_by(datum, publikationstag) %>% 
+  slice(which.max(publikationszeitpunkt)) %>% 
+  mutate(monat = format(as.Date(datum), "%b. %Y"),
+         monat = factor(monat, levels = c("Feb. 2020", "Mär. 2020", "Apr. 2020", "Mai. 2020", "Jun. 2020", "Jul. 2020", "Aug. 2020", "Sep. 2020", "Okt. 2020", "Nov. 2020", "Dez. 2020", "Jan. 2021")),
+         gruppe = "Gesundheitsministerium") %>% 
+  select(-delete)
+```
+
+## Daten kombinieren
+```{r}
+epi <- bind_rows(epi_timeline, epi_epikurve)
+```
+
+## Daten für Vergleich zusammenfassen
+```{r message=FALSE, include=TRUE}
+erkrankte_neu <- epi %>% 
+  group_by(publikationstag, gruppe) %>% 
+  filter(datum == max(datum)) %>% 
+  select(publikationstag, erkrankte_neu = erkrankte, gruppe) 
+
+# Summe aller Fälle bis zu diesem Publikationstag und Summe bis zum Vortag
+epi_summe <- epi %>% 
+  group_by(gruppe, publikationstag) %>% 
+  summarise(erkrankte_summe = sum(erkrankte)) %>% 
+  mutate(erkrankte_summe_vortag = lag(erkrankte_summe)) %>%  
+  left_join(erkrankte_neu, by = c("publikationstag", "gruppe"))
+
+# Fälle des Vortages
+epi_vortag <- epi %>% 
+  group_by(gruppe) %>% 
+  select(datum, publikationstag, erkrankte_vortag = erkrankte, gruppe) %>% 
+  mutate(publikationstag = publikationstag + 1) 
+
+# Aktuellste Tageszahlen
+epi_aktuelle <- epi %>% 
+  group_by(datum, gruppe) %>% 
+  filter(!is.na(erkrankte) & publikationszeitpunkt == max(publikationszeitpunkt)) %>% 
+  select(datum, aktuellster_wert = erkrankte, publikationstag_aktuell = publikationstag, quelle) 
+
+# Dataframes kombinieren
+epi_anpassung <- epi %>%
+  group_by(gruppe) %>% 
+  left_join(epi_summe, by = c("publikationstag", "gruppe")) %>%
+  left_join(epi_vortag, by = c("publikationstag", "datum", "gruppe")) 
+
+# Einzelne Tage behalten
+epi_anpassung_tag <- epi_anpassung %>% 
+  group_by(publikationstag, gruppe) %>% 
+  filter(row_number() == 1) %>% 
+  select(-c(erkrankte, datum)) 
+```
+
+# Datenvisualisierung
+
+## Abbildung E: Verlauf und Spannweite der Epidemiologischen Kurve (März 2020 bis Jänner 2021)
+Hier wird Abbildung E: Verlauf und Spannweite der Epidemiologischen Kurve (März 2020 bis Jänner 2021) erstellt.
+```{r echo=FALSE, fig.align="center", fig.cap="**Abbildung E: Verlauf und Spannweite der Epidemiologischen Kurve (März 2020 bis Jänner 2021)**", message=FALSE}
+minmax <- epi %>% 
+  group_by(datum, gruppe) %>% 
+  summarise(min = min(erkrankte, na.rm = TRUE),
+            max = max(erkrankte, na.rm = TRUE)) %>% 
+  left_join(epi_aktuelle, by = c("datum", "gruppe")) %>% 
+  filter(datum >= "2020-03-20" & datum <= "2020-12-31") %>% 
+  mutate(min = ifelse(datum == "2020-11-01" & gruppe == "AGES", NA, min), # für den 11.1.20 liegen nur Downloads bis 10:00 Uhr vor
+         max = ifelse(datum == "2020-11-01" & gruppe == "AGES", NA, max)) %>% 
+  ggplot() +
+    geom_line(aes(x = datum, y = aktuellster_wert, color = "Aktuellster Wert"), size = .5) +
+    geom_ribbon(aes(x = datum, ymin = min, ymax = max, fill = "Maximum-Minimum")) +
+    geom_vline(xintercept = c(as.Date("2020-10-06"), as.Date("2020-04-14")), linetype = "dashed", alpha = .5) +
+    facet_wrap(~gruppe) +
+    scale_x_date(name = "", date_labels = "%m/%Y", date_breaks = "2 months") +
+    scale_color_manual(name = "", values = c("Aktuellster Wert" = "#F8766D")) +
+    scale_fill_manual(name = "", values = c("Maximum-Minimum" = "#00BFC4")) +
+    scale_y_continuous(name = "tägliche Neuinfektionen") +
+    labs(caption = "Quelle: Repositories; Darstellung RH") 
+minmax
+```
+## Abbildung F: Relative Spannweite der Epidemiologischen Kurve (März 2020 bis Jänner 2021)
+Hier wird Abbildung F: Relative Spannweite der Epidemiologischen Kurve (März 2020 bis Jänner 2021) erstellt. 
+```{r message=FALSE, echo=FALSE, fig.align="center", fig.cap="**Abbildung F: Relative Spannweite der Epidemiologischen Kurve (März 2020 bis Jänner 2021)**"}
+rel_minmax <- epi %>% 
+  group_by(datum, gruppe) %>% 
+  summarise(min = min(erkrankte, na.rm = TRUE),
+            max = max(erkrankte, na.rm = TRUE),
+            differenz = max-min) %>% 
+  left_join(epi_aktuelle, by = c("datum", "gruppe")) %>% 
+  filter(datum >= "2020-03-20" & datum <= "2020-12-31") %>% 
+  mutate(min = ifelse(datum == "2020-11-01" & gruppe == "AGES", NA, min), # für den 11.1.20 liegen nur Downloads bis 10:00 Uhr vor
+         max = ifelse(datum == "2020-11-01" & gruppe == "AGES", NA, max)) %>% 
+  ggplot() +
+    geom_ribbon(aes(x = datum, ymin = ((min-aktuellster_wert)/aktuellster_wert), ymax = ((max-aktuellster_wert)/aktuellster_wert)), fill = "#00BFC4") +
+    geom_hline(yintercept = c(0), size = .25, linetype = "dashed") +  
+    geom_vline(xintercept = c(as.Date("2020-10-06"), as.Date("2020-04-14")), linetype = "dashed", alpha = .5) +
+    facet_wrap(~gruppe) +
+    scale_x_date(name = "", date_labels = "%m/%Y", date_breaks = "2 months") +
+    scale_y_continuous(name = "relatives Min-Max pro Tag", labels = function(x) paste(100*x, "%")) +
+  labs(caption = "Quelle: Repositories; Darstellung RH") 
+rel_minmax
+```
+
+## Abbildung G: Anzahl der Veränderungen des jeweiligen Tageswerts (März 2020 bis Jäner 2021
+Hier wird Abbildung G: Anzahl der Veränderungen des jeweiligen Tageswerts (März 2020 bis Jäner 2021 erstellt.
+
+```{r message=FALSE, echo=FALSE,  fig.align="center", fig.cap="**Abbildung G: Anzahl der Veränderungen des jeweiligen Tageswerts (März 2020 bis Jäner 2021**"}
+tage <- epi %>% 
+  group_by(datum, gruppe) %>% 
+  summarise(Reduktion = sum(lag(erkrankte) > erkrankte, na.rm = TRUE),
+            Nachtrag = sum(lag(erkrankte) < erkrankte, na.rm = TRUE),
+            anpassung = sum(lag(erkrankte) != erkrankte, na.rm = TRUE)) %>% 
+  pivot_longer(c(Nachtrag, Reduktion), names_to = "Anpassung", values_to = "Prozent") %>% 
+  filter(datum >= "2020-03-20" & datum <= "2020-12-31") %>% 
+  ggplot(aes(x = datum, y = Prozent, fill = Anpassung)) +
+    geom_area(position = "stack") +  
+    geom_vline(xintercept = c(as.Date("2020-10-06"), as.Date("2020-04-14")), linetype = "dashed", alpha = .5) +
+    facet_wrap(~gruppe) +
+    scale_fill_manual(values = c("#00BFC4","#F8766D")) +
+    scale_x_date(name = "", date_labels = "%m/%Y", date_breaks = "2 month") + 
+    scale_y_continuous(name = "Nachtrag und Reduktion an Folgetagen") +
+    labs(caption = "Quelle: Repositories; Darstellung RH") 
+tage
+```
+# Session Info
+
+Information über die Analyseumgebung (Betriebssystem, R Version, Pakete mit
+Versionen)
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,183 @@
+---
+title: "Darstellung der Neuinfektionszahlen"
+author: ""
+output:
+  html_document:
+    toc: yes
+    toc_depth: '2'
+    number_section: TRUE
+    df_print: paged
+  word_document:
+    toc: no
+    toc_depth: '2'
+---
+
+# Vorbereitung
+
+## Pakete installieren
+
+Pakete werden installiert, sofern sie nicht bereits vorhanden sind.
+
+```{r install_packages, message=FALSE, include=TRUE}
+needed_packages <- c("tidyverse", "scales", "xlsx", "lubridate", "cowplot", "ggrepel", "zoo")
+install.packages(setdiff(needed_packages, rownames(installed.packages()))) 
+```
+
+## Pakete laden
+```{r load_packages, message=FALSE, include=TRUE}
+library("tidyverse")
+library("scales")
+library("readr")
+library("lubridate")
+library("ggrepel")
+library("cowplot")
+```
+
+# Daten vorbereiten
+Die Daten werden, wie in den Files unzip.Rmd und preprocessing.Rmd beschrieben, aufbereitet.
+
+## Daten laden
+```{r message=FALSE, include=TRUE}
+rm(list = ls())
+bundeslaender_bevoelkerung <- read_rds("../data/bevoelkerung_bundeslaender.rds") 
+covid_fallzahlen <- read.csv("../data/CovidFallzahlen.csv", sep=";") 
+covid_tote_faelle <- read.csv("../data/CovidFaelle_Timeline.csv", sep=";")
+delta <- read.csv("../data/CovidFaelleDelta.csv", sep=";")
+```
+
+## Daten recodieren
+```{r message=FALSE, include=TRUE}
+covid_fallzahlen <-  covid_fallzahlen %>% 
+  mutate(meldedat_date = date(as.POSIXct(Meldedat, format="%d.%m.%Y")), 
+         Bundesland = gsub("Alle", "Österreich", Bundesland)) %>%
+  filter(meldedat_date >= "2020-04-01" & meldedat_date <"2021-01-01")
+
+covid_tote_faelle <- covid_tote_faelle %>% 
+  mutate(meldedat_date = date(as.POSIXct(Time, format="%d.%m.%Y")), 
+         AnzahlFaelle = as.numeric(AnzahlFaelle)) %>%
+  filter(meldedat_date >= "2020-01-04" & meldedat_date <"2021-01-01")
+
+delta <- delta %>% 
+  mutate(meldedat_date = date(as.POSIXct(Datum, format="%d.%m.%Y")), 
+         DeltaTestGesamtVortag = as.numeric(DeltaTestGesamtVortag)) %>%
+  filter(meldedat_date >= "2020-04-01" & meldedat_date <"2021-01-01") 
+
+tests_bl_fallzahlen <- covid_fallzahlen %>%
+  mutate(vortag_date = meldedat_date-1) %>%
+  left_join(bundeslaender_bevoelkerung, by=c("BundeslandID"="blcode")) %>%
+  left_join(covid_fallzahlen %>% 
+              select(meldedat_date, Bundesland, , BundeslandID, TestGesamt) %>% 
+              rename(vortag = TestGesamt), by=c("vortag_date"="meldedat_date", "Bundesland"="Bundesland")) %>%
+  drop_na(vortag) %>%
+  group_by(Bundesland) %>% 
+  mutate(delta_vortag = TestGesamt-vortag, 
+         cumsum_100k = (TestGesamt/bev)*100000,
+         cumsum_100k_rollmean = zoo::rollmean(cumsum_100k, k = 7, fill = NA), 
+         vortag_100k = (delta_vortag/bev)*100000, 
+         vortag_100k_rollmean = zoo::rollmean(vortag_100k, k = 7, fill = NA)) %>%
+  select(meldedat_date, TestGesamt, Bundesland, vortag_date, bev, vortag, 
+         delta_vortag, cumsum_100k, cumsum_100k_rollmean, vortag_100k, vortag_100k_rollmean)
+```
+
+# Datenvisualisierung
+
+## Abbildung 4:	Entwicklung der Neuinfektionen und COVID–19–bedingten Todesfälle März 2020 bis Jänner 2021
+Hier wird Abbildung 4:	Entwicklung der Neuinfektionen und COVID–19–bedingten Todesfälle März 2020 bis Jänner 2021 erstellt. 
+
+```{r fig.height=18, fig.width=6, message=FALSE, warning=FALSE, include=TRUE}
+covid_tote_faelle_refined_alternative <- covid_tote_faelle %>%
+  select(meldedat_date, Bundesland, AnzahlFaelle, AnzahlTotTaeglich) %>% 
+  group_by(Bundesland) %>% 
+  mutate(SiebenTageTote = zoo::rollmean(AnzahlTotTaeglich, k = 7, fill = NA), 
+         SiebenTageFaelle = zoo::rollmean(AnzahlFaelle, k = 7, fill = NA)) %>%
+  pivot_longer(cols=AnzahlFaelle:SiebenTageFaelle, names_to="type", values_to = "count") %>% 
+  mutate(category = ifelse(grepl("Faelle",type),'Neuinfektionen','Todesfälle'), 
+         calculation = ifelse(grepl("SiebenTage",type),'average','exact')) %>%
+  select(-type) 
+
+covid_tote_faelle_refined_alternative_wien <- covid_tote_faelle_refined_alternative %>% 
+  filter(Bundesland=="Wien")
+covid_tote_faelle_refined_alternative_bl_ohnewien <- covid_tote_faelle_refined_alternative %>% 
+  filter(Bundesland!="Österreich" & Bundesland !="Wien")
+covid_tote_faelle_refined_alternative_at <- covid_tote_faelle_refined_alternative %>% 
+  filter(Bundesland=="Österreich")
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, fig.width = 6, fig.height=8, fig.cap="**Abbildung 4:	Entwicklung der Neuinfektionen und COVID–19–bedingten Todesfälle März 2020 bis Jänner 2021**"}
+ggplot(covid_tote_faelle_refined_alternative_at, aes(meldedat_date, count)) + 
+  geom_area(data = subset(covid_tote_faelle_refined_alternative_at, calculation == "exact"), stat="identity", fill = "#00BFC4", alpha = 0.9) +
+  geom_line(data = subset(covid_tote_faelle_refined_alternative_at, calculation == "average"), color = "#F8766D") +
+  facet_wrap(Bundesland~category, ncol = 1, scales="free", shrink = T, dir="v") + 
+  scale_x_date(name ="", date_labels = "%m/%Y") +
+  scale_y_continuous(name = "", labels = function(x) format(x, big.mark = ".", decimal.mark = ",", scientific = FALSE)) +
+  labs(caption = "Quellen: EMS; Darstellung RH") 
+```
+
+
+## Abbildung 7: Entwicklung der gemeldeten Tests von April 2020 bis Jänner 2021
+Hier wird Abbildung 7: Entwicklung der gemeldeten Tests von April 2020 bis Jänner 2021 des Berichthauptteils erstellt.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, fig.align="center", fig.cap="**Abbildung 7:	Entwicklung der gemeldeten Tests von April 2020 bis Jänner 2021**"}
+tests_at <- delta %>%
+  select(meldedat_date, DeltaTestGesamtVortag) %>% 
+  mutate(DeltaTestGesamtVortagSchnitt = zoo::rollmean(DeltaTestGesamtVortag, k = 7, fill = NA)) %>%
+  pivot_longer(cols=DeltaTestGesamtVortag:DeltaTestGesamtVortagSchnitt, names_to = "typ", values_to = "count") %>%
+  mutate(typ = gsub("DeltaTestGesamtVortagSchnitt", "Sieben-Tages-Schnitt Testungen", typ), 
+         typ = gsub("DeltaTestGesamtVortag", "Täglich gemeldete Testungen", typ)) 
+
+tests_at %>%
+  ggplot(aes(x = meldedat_date, y = count, col=typ)) +
+  geom_line() +
+  geom_hline(yintercept = 15000, size = .25, linetype = "dashed") +  
+  scale_x_date(name = "", date_labels = "%m/%Y")+
+  scale_y_continuous(labels=function(x) format(x, big.mark = ".", decimal.mark = ",", scientific = FALSE))+
+  expand_limits(y = 0) +
+  labs(y = "Testungen", caption = "Quellen: Repositories; SKKM-Meldungen; Darstellung RH") 
+```
+
+
+## Abbildung 8:	Kumulierte Anzahl der gemeldeten Tests je 100.000 Einwohnerinnen bzw. Einwohner und Land
+Hier wird Abbildung 8:	Kumulierte Anzahl der gemeldeten Tests je 100.000 Einwohnerinnen bzw. Einwohner und Land erstellt.  
+
+```{r message=FALSE, warning=FALSE, include=TRUE}
+# Vorbereiten der Daten
+tests_bl_fallzahlen_cumsum_100k <- tests_bl_fallzahlen %>%
+  select(meldedat_date, Bundesland, cumsum_100k) %>%
+  spread(Bundesland, cumsum_100k) %>%
+  select(meldedat_date, Österreich, everything()) %>%
+  gather(bl, value, Burgenland:Wien) %>%
+  ungroup()
+
+# Labels generieren
+data_ends <- tests_bl_fallzahlen_cumsum_100k %>%
+  group_by(bl) %>% 
+  top_n(1, meldedat_date) %>% 
+  mutate(value = round(value, digits=0))
+```
+
+```{r message=FALSE, echo=FALSE, fig.align="center", fig.cap="**Abbildung 8:	Kumulierte Anzahl der gemeldeten Tests je 100.000 Einwohnerinnen bzw. Einwohner und Land**"}
+tests_bl_fallzahlen_cumsum_100k %>%
+  ggplot(aes(x = meldedat_date, y = value)) +
+  geom_line(aes(y = Österreich), color = "#00BFC4", size = 0.9) +
+  geom_line(color = "#F8766D", size = 0.9) +
+  geom_text_repel(
+    aes(label = value), data = data_ends, 
+    size = 3, 
+    nudge_x = -90,
+    color = "#F8766D") +
+  facet_wrap(~bl, ncol=3) +
+  scale_color_manual(values = "#7CAE00") +
+  scale_x_date(name = "", date_labels = "%m/%y")+
+  scale_y_continuous(labels=function(x) format(x, big.mark = ".", decimal.mark = ",", scientific = FALSE))+
+  labs(y = "Testungen/100.000 Einwohner", caption = "Quellen: Repositories; SKKM-Meldungen; Darstellung RH") 
+```
+
+
+# Session Info
+
+Information über die Analyseumgebung (Betriebssystem, R Version, Pakete mit
+Versionen)
+
+```{r}
+sessionInfo()
+```
